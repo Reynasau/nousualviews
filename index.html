@@ -54,6 +54,17 @@ section[id]{scroll-margin-top:var(--hdr)}
 .cur.show .dot{opacity:0;transform:scale(0)}
 @media (hover:none),(pointer:coarse){.cur{display:none}}
 
+/* ---------- Transición suave entre botones (resaltado que se desliza) ---------- */
+.glide{position:fixed;left:0;top:0;z-index:399;pointer-events:none;opacity:0;background:rgba(230,216,193,.08);will-change:transform,width,height,opacity}
+.glide.light{background:rgba(26,5,9,.06)}
+.glide-on .hdr nav a::after{display:none}
+@media (hover:none),(pointer:coarse),(prefers-reduced-motion:reduce){.glide{display:none}}
+/* Indicador que se desliza entre opciones seleccionadas (filtros de Gallery) */
+.arc-bar{isolation:isolate}
+.arc-bar .seg{position:absolute;top:6px;left:0;height:38px;width:0;border-radius:999px;background:var(--cream);z-index:-1;pointer-events:none;transition:transform .8s cubic-bezier(.25,.8,.25,1),width .8s cubic-bezier(.25,.8,.25,1)}
+.arc-bar.has-seg button.on{background:transparent}
+.arc-bar button{position:relative}
+
 /* ---------- Header ---------- */
 .hdr{position:fixed;top:0;left:0;right:0;z-index:90;height:calc(var(--hdr) + env(safe-area-inset-top));padding:env(safe-area-inset-top) var(--pad) 0;display:flex;align-items:center;justify-content:space-between;transition:background .4s}
 .hdr.solid{background:rgba(26,5,9,.85);-webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px)}
@@ -554,7 +565,7 @@ var PORTADA = [
     <h1 class="wm" id="wm" aria-label="nousualviews"><span class="w">nousual</span><span class="box" aria-hidden="true"><img id="boxImg" alt=""></span><span class="w">views</span></h1>
     <div class="hero-sub">
       <p>Más allá de la imagen, la emoción del momento. Instantes capturados a través de la emoción: no solo cómo se veían, sino cómo se sintió vivirlos.</p>
-      <div class="tags" id="heroTags"></div>
+      
     </div>
     <div class="hero-foot lbl"><span>Deportes · Paisaje · Naturaleza · Street</span><span class="cue"><i></i>Desliza</span></div>
   </section>
@@ -1002,6 +1013,102 @@ if(!TOUCH){
   addEventListener('mousemove',function(e){ mx = e.clientX; my = e.clientY; curAt() },{passive:true});
   document.addEventListener('mouseleave',function(){ curEl.classList.remove('show') });
 }
+
+/* ---------- Transición suave entre botones ----------
+   Un resaltado con física de resorte viaja de un botón a otro y toma su forma;
+   el botón se inclina levemente hacia el cursor y se comprime al presionarlo. */
+(function(){
+  var FINE = matchMedia('(hover:hover) and (pointer:fine)').matches && !REDUCE;
+  var PICK = 'a,button,[role=button],.chips label';
+  function ok(el){
+    if(!el || el.matches(':disabled,[aria-disabled=true]')) return false;
+    var r = el.getBoundingClientRect();
+    return r.width > 0 && r.width <= 360 && r.height <= 100;
+  }
+  // Resorte críticamente amortiguado: movimiento suave, sin rebote
+  function spring(p, v, to, dt, k){ var d = p-to, e = v+k*d, x = Math.exp(-k*dt); return [to+(d+e*dt)*x, (v-k*e*dt)*x] }
+
+  // Presión: el botón se comprime y regresa con suavidad (también en móvil)
+  var pressed = null;
+  function release(){
+    if(!pressed || REDUCE){ pressed = null; return }
+    var el = pressed; pressed = null;
+    el.animate([{scale:'.98'},{scale:'1'}],{duration:500,easing:'cubic-bezier(.22,1,.36,1)'});
+  }
+  document.addEventListener('pointerdown',function(e){
+    var el = e.target.closest(PICK); if(!ok(el) || REDUCE) return;
+    pressed = el; el.animate([{scale:'1'},{scale:'.98'}],{duration:160,easing:'ease-out',fill:'forwards'}).finished.then(function(a){ if(pressed!==el) a.cancel() });
+    hold = true; kick();
+  });
+  addEventListener('pointerup',function(){ hold = false; release(); kick() });
+  addEventListener('pointercancel',function(){ hold = false; release() });
+
+  if(!FINE) return;
+  var root = document.documentElement, g = document.createElement('div');
+  g.className = 'glide'; document.body.appendChild(g); root.classList.add('glide-on');
+  var S = {x:0,y:0,w:10,h:10,r:5,a:0}, V = {x:0,y:0,w:0,h:0,r:0,a:0}, T = {x:0,y:0,w:10,h:10,r:5,a:0};
+  var px = -1, py = -1, over = null, raf = 0, last = 0, hold = false;
+  var mag = new Map(); // elementos con desplazamiento magnético
+
+  function pick(){
+    if(px < 0) return null;
+    var hit = document.elementFromPoint(px,py); if(!hit || hit.closest('input,textarea,.arc-stage')) return null;
+    var el = hit.closest(PICK); return ok(el) ? el : null;
+  }
+  function frame(t){
+    raf = 0;
+    var dt = last ? Math.min((t-last)/1000,.05) : 1/60; last = t;
+    var el = pick();
+    if(el !== over){ if(over && mag.get(over)){ mag.get(over).gx = 0; mag.get(over).gy = 0 } over = el }
+    if(over){
+      var b = over.getBoundingClientRect(), cs = getComputedStyle(over), m = mag.get(over);
+      if(!m){ m = {x:0,y:0,vx:0,vy:0,gx:0,gy:0}; mag.set(over,m) }
+      m.gx = Math.max(-1.5,Math.min(1.5,(px-(b.left-m.x)-b.width/2)*.03));
+      m.gy = Math.max(-1.5,Math.min(1.5,(py-(b.top-m.y)-b.height/2)*.03));
+      var bare = parseFloat(cs.paddingLeft) < 6;           // enlaces de texto: se les da aire
+      var padX = bare ? 10 : 0, padY = bare ? 5 : 0, k = hold ? .98 : 1;
+      var w = (b.width+padX*2)*k, h = (b.height+padY*2)*k, rad = parseFloat(cs.borderTopLeftRadius)||0;
+      T = {x:b.left+b.width/2, y:b.top+b.height/2, w:w, h:h, r:(bare || rad >= b.height/2-1) ? h/2 : Math.max(rad,8), a:1};
+      g.classList.toggle('light', !!over.closest('.proj-main,.proj-hdr'));
+    } else T = {x:px, y:py, w:hold?8:10, h:hold?8:10, r:5, a:0};
+    var moving = false;
+    // Si está invisible, aparece desde el cursor en vez de viajar desde lejos
+    if(!over && S.a < .01){ S.x = px; S.y = py; V.x = V.y = 0 }
+    for(var key in S){
+      var r = spring(S[key], V[key], T[key], dt, key==='a' ? 12 : 13); S[key] = r[0]; V[key] = r[1];
+      if(Math.abs(S[key]-T[key]) > .02 || Math.abs(V[key]) > .05) moving = true;
+    }
+    mag.forEach(function(m,e){
+      var a = spring(m.x,m.vx,m.gx,dt,14), c = spring(m.y,m.vy,m.gy,dt,14);
+      m.x = a[0]; m.vx = a[1]; m.y = c[0]; m.vy = c[1];
+      var busy = Math.abs(m.x-m.gx)+Math.abs(m.y-m.gy)+Math.abs(m.vx)+Math.abs(m.vy) > .02;
+      if(e !== over && !busy){ e.style.translate = ''; mag.delete(e) } else { e.style.translate = m.x.toFixed(2)+'px '+m.y.toFixed(2)+'px'; moving = moving || busy }
+    });
+    g.style.width = S.w+'px'; g.style.height = S.h+'px'; g.style.borderRadius = S.r+'px';
+    g.style.transform = 'translate3d('+(S.x-S.w/2)+'px,'+(S.y-S.h/2)+'px,0)'; g.style.opacity = Math.max(0,Math.min(1,S.a));
+    curEl.style.opacity = over ? '0' : '';
+    if(moving || over) raf = requestAnimationFrame(frame); else last = 0;
+  }
+  function kick(){ if(FINE && !raf) raf = requestAnimationFrame(frame) }
+  addEventListener('pointermove',function(e){ if(e.pointerType !== 'mouse') return; px = e.clientX; py = e.clientY; kick() },{passive:true});
+  addEventListener('scroll',kick,{passive:true,capture:true});
+  document.addEventListener('mouseleave',function(){ px = py = -1; kick() });
+  addEventListener('blur',function(){ px = py = -1; kick() });
+})();
+
+/* ---------- Indicador deslizante en los filtros de Gallery ---------- */
+(function(){
+  var bar = $('#arcBar'), seg = document.createElement('span'); seg.className = 'seg'; bar.prepend(seg); bar.classList.add('has-seg');
+  function place(){
+    var on = bar.querySelector('button.on'); if(!on || !on.offsetWidth) return;
+    seg.style.transform = 'translateX('+on.offsetLeft+'px)'; seg.style.width = on.offsetWidth+'px';
+    seg.style.top = on.offsetTop+'px'; seg.style.height = on.offsetHeight+'px';
+    if(on.scrollIntoView && bar.scrollWidth > bar.clientWidth) on.scrollIntoView({block:'nearest',inline:'center',behavior:REDUCE?'auto':'smooth'});
+  }
+  new MutationObserver(place).observe(bar,{subtree:true,attributes:true,attributeFilter:['class']});
+  new MutationObserver(function(){ requestAnimationFrame(place) }).observe(arc,{attributes:true,attributeFilter:['class']});
+  addEventListener('resize',place);
+})();
 
 /* ---------- Bucle ---------- */
 var ticking = false, lastJT = null;
